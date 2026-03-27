@@ -5,11 +5,10 @@ import io
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load local .env file (for local use)
+# Load local .env file
 load_dotenv()
 
 # --- 1. CONFIGURE GOOGLE AI ---
-# Safely load the API key from Streamlit Cloud or local environment
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 else:
@@ -21,42 +20,39 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# --- 2. DEFINE THE AI TOOL ---
-def tax_calculator(salary: float, deductions: float = 0.0) -> str:
-    """
-    Calculates and compares taxes under the Old and New Indian Tax Regimes.
-    Input the gross salary and any deductions (like 80C, HRA).
-    """
-    new_tax = salary * 0.10 
-    taxable_old = max(0, salary - deductions)
-    old_tax = taxable_old * 0.15
-    recommendation = "New Regime" if new_tax <= old_tax else "Old Regime"
-    savings = abs(new_tax - old_tax)
-    return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
+# --- 2. SETUP THE AI AGENT ---
+# We give the AI a strong persona to do the math itself!
+system_prompt = """You are an expert AI Money Mentor for the ET Hackathon. 
+Your job is to act as a 'Tax Wizard'. 
+When a user provides their salary and deductions (or a Form 16 text), you must:
+1. Identify their gross salary and deductions.
+2. Calculate taxes under the Old Regime.
+3. Calculate taxes under the New Regime.
+4. Recommend which regime is better and show the exact savings.
+5. Suggest 2-3 tax-saving investments based on their profile.
+Be friendly, highly structured, and use emojis!"""
 
-# --- 3. SETUP THE AI AGENT & MEMORY ---
-# Initialize the correct model
 model = genai.GenerativeModel(
     model_name='gemini-1.5-flash',
-    tools=[tax_calculator],
-    system_instruction="You are an AI Money Mentor for the ET Hackathon. Use the tax_calculator tool to calculate taxes based on user input. Be friendly and helpful."
+    system_instruction=system_prompt
 )
 
-# CRITICAL FIX: Ensure session memory is created before the UI loads
 if "chat_session" not in st.session_state:
-    st.session_state.chat_session = model.start_chat(enable_automatic_function_calling=True)
+    st.session_state.chat_session = model.start_chat(history=[])
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 4. HELPER: READ PDF ---
+# --- 3. HELPER: READ PDF ---
 def extract_text_from_pdf(uploaded_file):
     pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
     text = ""
     for page in range(len(pdf_reader.pages)):
-        text += pdf_reader.pages[page].extract_text()
+        extracted = pdf_reader.pages[page].extract_text()
+        if extracted:
+            text += extracted
     return text
 
-# --- 5. BUILD THE UI ---
+# --- 4. BUILD THE UI ---
 st.set_page_config(page_title="ET AI Money Mentor", page_icon="💸", layout="wide")
 st.title("💸 AI Money Mentor: Tax Wizard")
 st.markdown("Upload your Form 16, or just type your salary below!")
@@ -65,15 +61,21 @@ st.markdown("Upload your Form 16, or just type your salary below!")
 st.sidebar.header("Upload Documents")
 uploaded_file = st.sidebar.file_uploader("Upload Form 16 (PDF)", type=["pdf"])
 
-# Document Processing Logic
 if uploaded_file and st.sidebar.button("Analyze My Document"):
     with st.spinner("Extracting numbers and calculating taxes..."):
         document_text = extract_text_from_pdf(uploaded_file)
-        prompt = f"Here is my tax document: '{document_text}'. Find my gross salary and deductions, then calculate my taxes."
         
-        # This will now perfectly find the chat_session in memory!
-        response = st.session_state.chat_session.send_message(prompt)
-        st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response.text}"})
+        if not document_text.strip():
+            st.error("Could not read text from this PDF. Ensure it is not a scanned image.")
+        else:
+            prompt = f"Here is my tax document: \n\n{document_text}\n\nFind my gross salary and deductions, calculate my taxes, and recommend the best regime."
+            
+            # Send to AI
+            response = st.session_state.chat_session.send_message(prompt)
+            
+            # Add to UI History
+            st.session_state.messages.append({"role": "user", "content": f"*(Uploaded Document: {uploaded_file.name})*"})
+            st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response.text}"})
 
 # Display Chat History
 for msg in st.session_state.messages:
