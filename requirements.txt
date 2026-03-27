@@ -1,6 +1,5 @@
 streamlit
-langchain==0.2.16
-langchain-community==0.2.16
-langchain-google-genai==1.0.8
+langchain
+langchain-google-genai
 python-dotenv
 PyPDF2
