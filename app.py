@@ -1,0 +1,103 @@
+import streamlit as st
+import os
+import PyPDF2
+import io
+from dotenv import load_dotenv
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import initialize_agent, AgentType
+
+# Load the secret API key from the .env file
+load_dotenv()
+
+# --- 1. DEFINE THE AI TOOL (The Math Engine) ---
+@tool
+def tax_calculator(salary: float, deductions: float = 0.0) -> str:
+    """
+    Calculates and compares taxes under the Old and New Indian Tax Regimes.
+    Input the gross salary and any deductions (like 80C, HRA).
+    """
+    # New Regime (Simplified: No deductions allowed, flat 10% average for hackathon demo)
+    new_tax = salary * 0.10 
+    
+    # Old Regime (Simplified: Allows deductions, 15% average on remainder)
+    taxable_old = max(0, salary - deductions)
+    old_tax = taxable_old * 0.15
+    
+    recommendation = "New Regime" if new_tax <= old_tax else "Old Regime"
+    savings = abs(new_tax - old_tax)
+    
+    return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
+
+# --- 2. SETUP THE AI AGENT ---
+def create_tax_agent():
+    # Initialize the Gemini LLM
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    
+    # Give the agent access to the math tool
+    tools = [tax_calculator]
+    
+    # Initialize the agent
+    agent = initialize_agent(
+        tools, 
+        llm, 
+        agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION, 
+        verbose=True
+    )
+    return agent
+
+# --- 3. HELPER FUNCTION: READ PDF ---
+def extract_text_from_pdf(uploaded_file):
+    pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
+    text = ""
+    for page in range(len(pdf_reader.pages)):
+        text += pdf_reader.pages[page].extract_text()
+    return text
+
+# --- 4. BUILD THE UI (Streamlit) ---
+st.set_page_config(page_title="ET AI Money Mentor", page_icon="💸", layout="wide")
+
+st.title("💸 AI Money Mentor: Tax Wizard")
+st.markdown("Chat with me to optimize your taxes, or upload your Form 16 to get started instantly!")
+
+# Sidebar for File Upload
+st.sidebar.header("Upload Documents")
+uploaded_file = st.sidebar.file_uploader("Upload Form 16/Salary Slip (PDF)", type=["pdf"])
+
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Process PDF if uploaded
+if uploaded_file is not None:
+    if st.sidebar.button("Analyze My Document"):
+        with st.spinner("Extracting numbers and calculating taxes..."):
+            document_text = extract_text_from_pdf(uploaded_file)
+            hidden_prompt = f"The user uploaded a tax document. Here is the text: '{document_text}'. Find their gross salary and deductions, then use your tax_calculator tool to tell them which tax regime is better."
+            
+            agent = create_tax_agent()
+            response = agent.run(hidden_prompt)
+            
+            st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response}"})
+
+# Display past chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Text Input for Chat
+user_input = st.chat_input("E.g., My salary is 15 Lakhs and I have 2 Lakhs in 80C deductions.")
+
+if user_input:
+    # Show user message
+    st.chat_message("user").markdown(user_input)
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Show AI response
+    with st.chat_message("assistant"):
+        with st.spinner("Crunching the numbers..."):
+            agent = create_tax_agent()
+            response = agent.run(user_input)
+            st.markdown(response)
+            
+    st.session_state.messages.append({"role": "assistant", "content": response})
