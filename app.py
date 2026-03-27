@@ -35,15 +35,12 @@ def tax_calculator(salary: float, deductions: float = 0.0) -> str:
     return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
 
 # --- 3. SETUP THE AI AGENT ---
+
 model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash',
+    model_name='gemini-1.5-flash',  # <--- FIXED!
     tools=[tax_calculator],
     system_instruction="You are an AI Money Mentor for the ET Hackathon. Use the tax_calculator tool to calculate taxes based on user input. Be friendly and helpful."
 )
-
-if "chat_session" not in st.session_state:
-    st.session_state.chat_session = model.start_chat(enable_automatic_function_calling=True)
-    st.session_state.messages = []
 
 # --- 4. HELPER: READ PDF ---
 def extract_text_from_pdf(uploaded_file):
