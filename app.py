@@ -5,11 +5,16 @@ import io
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load local .env file (Streamlit Cloud will use your secrets automatically)
+# Load local .env file (for when you run it on your own computer)
 load_dotenv()
 
 # --- 1. CONFIGURE GOOGLE AI ---
-api_key = os.environ.get("GOOGLE_API_KEY")
+# First try to get the key from Streamlit Secrets (Cloud), then fallback to local .env
+if "GOOGLE_API_KEY" in st.secrets:
+    api_key = st.secrets["GOOGLE_API_KEY"]
+else:
+    api_key = os.environ.get("GOOGLE_API_KEY")
+
 if not api_key:
     st.error("Missing GOOGLE_API_KEY. Please add it to your Streamlit secrets!")
     st.stop()
@@ -30,14 +35,12 @@ def tax_calculator(salary: float, deductions: float = 0.0) -> str:
     return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
 
 # --- 3. SETUP THE AI AGENT ---
-# We give the model our tool and tell it how to behave
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
     tools=[tax_calculator],
     system_instruction="You are an AI Money Mentor for the ET Hackathon. Use the tax_calculator tool to calculate taxes based on user input. Be friendly and helpful."
 )
 
-# Initialize chat session with AUTOMATIC tool calling!
 if "chat_session" not in st.session_state:
     st.session_state.chat_session = model.start_chat(enable_automatic_function_calling=True)
     st.session_state.messages = []
@@ -64,7 +67,6 @@ if uploaded_file and st.sidebar.button("Analyze My Document"):
         document_text = extract_text_from_pdf(uploaded_file)
         prompt = f"Here is my tax document: '{document_text}'. Find my gross salary and deductions, then calculate my taxes."
         
-        # Send to AI
         response = st.session_state.chat_session.send_message(prompt)
         st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response.text}"})
 
@@ -77,15 +79,12 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("E.g., My salary is 15 Lakhs and I have 2 Lakhs in 80C deductions.")
 
 if user_input:
-    # Add user message to UI
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.chat_message("user").markdown(user_input)
 
-    # Get AI response
     with st.chat_message("assistant"):
         with st.spinner("Crunching the numbers..."):
             response = st.session_state.chat_session.send_message(user_input)
             st.markdown(response.text)
             
-    # Save AI response to history
     st.session_state.messages.append({"role": "assistant", "content": response.text})
