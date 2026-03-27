@@ -5,11 +5,11 @@ import io
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load local .env file (for when you run it on your own computer)
+# Load local .env file (for local use)
 load_dotenv()
 
 # --- 1. CONFIGURE GOOGLE AI ---
-# First try to get the key from Streamlit Secrets (Cloud), then fallback to local .env
+# Safely load the API key from Streamlit Cloud or local environment
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 else:
@@ -34,13 +34,19 @@ def tax_calculator(salary: float, deductions: float = 0.0) -> str:
     savings = abs(new_tax - old_tax)
     return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
 
-# --- 3. SETUP THE AI AGENT ---
-
+# --- 3. SETUP THE AI AGENT & MEMORY ---
+# Initialize the correct model
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',  # <--- FIXED!
+    model_name='gemini-1.5-flash',
     tools=[tax_calculator],
     system_instruction="You are an AI Money Mentor for the ET Hackathon. Use the tax_calculator tool to calculate taxes based on user input. Be friendly and helpful."
 )
+
+# CRITICAL FIX: Ensure session memory is created before the UI loads
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = model.start_chat(enable_automatic_function_calling=True)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 # --- 4. HELPER: READ PDF ---
 def extract_text_from_pdf(uploaded_file):
@@ -59,11 +65,13 @@ st.markdown("Upload your Form 16, or just type your salary below!")
 st.sidebar.header("Upload Documents")
 uploaded_file = st.sidebar.file_uploader("Upload Form 16 (PDF)", type=["pdf"])
 
+# Document Processing Logic
 if uploaded_file and st.sidebar.button("Analyze My Document"):
     with st.spinner("Extracting numbers and calculating taxes..."):
         document_text = extract_text_from_pdf(uploaded_file)
         prompt = f"Here is my tax document: '{document_text}'. Find my gross salary and deductions, then calculate my taxes."
         
+        # This will now perfectly find the chat_session in memory!
         response = st.session_state.chat_session.send_message(prompt)
         st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response.text}"})
 
