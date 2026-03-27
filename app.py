@@ -2,19 +2,21 @@ import streamlit as st
 import os
 import PyPDF2
 import io
+import google.generativeai as genai
 from dotenv import load_dotenv
 
-# --- MODERN LANGCHAIN IMPORTS ---
-from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate
-
-# Load the secret API key from the .env file (for local use)
+# Load local .env file (Streamlit Cloud will use your secrets automatically)
 load_dotenv()
 
-# --- 1. DEFINE THE AI TOOL (The Math Engine) ---
-@tool
+# --- 1. CONFIGURE GOOGLE AI ---
+api_key = os.environ.get("GOOGLE_API_KEY")
+if not api_key:
+    st.error("Missing GOOGLE_API_KEY. Please add it to your Streamlit secrets!")
+    st.stop()
+
+genai.configure(api_key=api_key)
+
+# --- 2. DEFINE THE AI TOOL ---
 def tax_calculator(salary: float, deductions: float = 0.0) -> str:
     """
     Calculates and compares taxes under the Old and New Indian Tax Regimes.
@@ -27,25 +29,20 @@ def tax_calculator(salary: float, deductions: float = 0.0) -> str:
     savings = abs(new_tax - old_tax)
     return f"Old Regime Tax: ₹{old_tax:,.2f} | New Regime Tax: ₹{new_tax:,.2f}. Recommendation: Opt for the {recommendation} to save ₹{savings:,.2f}."
 
-# --- 2. SETUP THE AI AGENT (Modern Way) ---
-def create_tax_agent():
-    # Initialize the LLM
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-    tools = [tax_calculator]
-    
-    # Modern LangChain requires a specific prompt format
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are an AI Money Mentor. Use your tax_calculator tool to calculate taxes for the user. Present the results clearly."),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
-    
-    # Create the modern tool-calling agent
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-    return agent_executor
+# --- 3. SETUP THE AI AGENT ---
+# We give the model our tool and tell it how to behave
+model = genai.GenerativeModel(
+    model_name='gemini-2.5-flash',
+    tools=[tax_calculator],
+    system_instruction="You are an AI Money Mentor for the ET Hackathon. Use the tax_calculator tool to calculate taxes based on user input. Be friendly and helpful."
+)
 
-# --- 3. HELPER FUNCTION: READ PDF ---
+# Initialize chat session with AUTOMATIC tool calling!
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = model.start_chat(enable_automatic_function_calling=True)
+    st.session_state.messages = []
+
+# --- 4. HELPER: READ PDF ---
 def extract_text_from_pdf(uploaded_file):
     pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
     text = ""
@@ -53,54 +50,42 @@ def extract_text_from_pdf(uploaded_file):
         text += pdf_reader.pages[page].extract_text()
     return text
 
-# --- 4. BUILD THE UI (Streamlit) ---
+# --- 5. BUILD THE UI ---
 st.set_page_config(page_title="ET AI Money Mentor", page_icon="💸", layout="wide")
-
 st.title("💸 AI Money Mentor: Tax Wizard")
-st.markdown("Chat with me to optimize your taxes, or upload your Form 16 to get started instantly!")
+st.markdown("Upload your Form 16, or just type your salary below!")
 
-# Sidebar for File Upload
+# Sidebar for PDF Upload
 st.sidebar.header("Upload Documents")
-uploaded_file = st.sidebar.file_uploader("Upload Form 16/Salary Slip (PDF)", type=["pdf"])
+uploaded_file = st.sidebar.file_uploader("Upload Form 16 (PDF)", type=["pdf"])
 
-# Initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if uploaded_file and st.sidebar.button("Analyze My Document"):
+    with st.spinner("Extracting numbers and calculating taxes..."):
+        document_text = extract_text_from_pdf(uploaded_file)
+        prompt = f"Here is my tax document: '{document_text}'. Find my gross salary and deductions, then calculate my taxes."
+        
+        # Send to AI
+        response = st.session_state.chat_session.send_message(prompt)
+        st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response.text}"})
 
-# Process PDF if uploaded
-if uploaded_file is not None:
-    if st.sidebar.button("Analyze My Document"):
-        with st.spinner("Extracting numbers and calculating taxes..."):
-            document_text = extract_text_from_pdf(uploaded_file)
-            hidden_prompt = f"The user uploaded a tax document. Here is the text: '{document_text}'. Find their gross salary and deductions, then use your tax_calculator tool to tell them which tax regime is better."
-            
-            agent_executor = create_tax_agent()
-            # Modern LangChain execution
-            result = agent_executor.invoke({"input": hidden_prompt})
-            response = result["output"]
-            
-            st.session_state.messages.append({"role": "assistant", "content": f"**Document Analyzed!**\n\n{response}"})
+# Display Chat History
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# Display past chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Text Input for Chat
+# Chat Input
 user_input = st.chat_input("E.g., My salary is 15 Lakhs and I have 2 Lakhs in 80C deductions.")
 
 if user_input:
-    # Show user message
-    st.chat_message("user").markdown(user_input)
+    # Add user message to UI
     st.session_state.messages.append({"role": "user", "content": user_input})
+    st.chat_message("user").markdown(user_input)
 
-    # Show AI response
+    # Get AI response
     with st.chat_message("assistant"):
         with st.spinner("Crunching the numbers..."):
-            agent_executor = create_tax_agent()
-            # Modern LangChain execution
-            result = agent_executor.invoke({"input": user_input})
-            response = result["output"]
-            st.markdown(response)
+            response = st.session_state.chat_session.send_message(user_input)
+            st.markdown(response.text)
             
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # Save AI response to history
+    st.session_state.messages.append({"role": "assistant", "content": response.text})
