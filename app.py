@@ -31,8 +31,9 @@ When a user provides their salary and deductions (or a Form 16 text), you must:
 5. Suggest 2-3 tax-saving investments based on their profile.
 Be friendly, highly structured, and use emojis!"""
 
+# Updated to the correct, active model version
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     system_instruction=system_prompt
 )
 
